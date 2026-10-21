@@ -1,0 +1,16 @@
+{
+  "name": "@eventpulse/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "build": "tsc -b",
+    "dev": "tsx watch src/index.ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@eventpulse/config": "*",
+    "@eventpulse/shared": "*"
+  }
+}
