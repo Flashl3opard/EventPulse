@@ -1,0 +1,188 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum PaymentStatus {
+  INITIATED
+  AUTHORIZED
+  CAPTURED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentEventType {
+  PAYMENT_INITIATED
+  PAYMENT_AUTHORIZED
+  PAYMENT_CAPTURED
+  PAYMENT_FAILED
+  PAYMENT_REFUNDED
+}
+
+enum PaymentEventProcessingStatus {
+  PENDING
+  APPLIED
+  DUPLICATE_IGNORED
+  REJECTED_INVALID_TRANSITION
+  ORPHANED_OUT_OF_ORDER
+}
+
+enum OutboxStatus {
+  PENDING
+  PUBLISHED
+  FAILED
+}
+
+enum LedgerTransactionType {
+  CAPTURE
+  REFUND
+}
+
+enum LedgerAccount {
+  PLATFORM_CASH
+  MERCHANT_PAYABLE
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+model Merchant {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  payments           Payment[]
+  paymentEvents      PaymentEvent[]
+  ledgerTransactions LedgerTransaction[]
+
+  @@map("merchants")
+}
+
+// Created when `payment.initiated` is processed. Status is then advanced
+// exclusively by the event-consumer (see docs/decisions.md once written) —
+// the API's acceptance transaction never mutates payment status itself.
+model Payment {
+  id                    String        @id @default(uuid()) @db.Uuid
+  merchantId            String        @db.Uuid
+  merchant              Merchant      @relation(fields: [merchantId], references: [id])
+  status                PaymentStatus @default(INITIATED)
+  currency              String        @db.VarChar(3)
+  requestedAmountMinor  Int
+  authorizedAmountMinor Int?
+  capturedAmountMinor   Int?
+  refundedAmountMinor   Int           @default(0)
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  events             PaymentEvent[]
+  ledgerTransactions LedgerTransaction[]
+
+  @@index([merchantId])
+  @@map("payments")
+}
+
+// The durable, immutable record of an accepted event, written atomically
+// with its OutboxRecord by the API. `eventId` is the idempotency key
+// supplied by the caller.
+model PaymentEvent {
+  id            String           @id @default(uuid()) @db.Uuid
+  eventId       String           @unique @db.Uuid
+  merchantId    String           @db.Uuid
+  merchant      Merchant         @relation(fields: [merchantId], references: [id])
+  paymentId     String           @db.Uuid
+  payment       Payment          @relation(fields: [paymentId], references: [id])
+  eventType     PaymentEventType
+  schemaVersion Int
+  occurredAt    DateTime
+  payload       Json
+  receivedAt    DateTime         @default(now())
+
+  outboxRecord      OutboxRecord?
+  inboxRecord       InboxRecord?
+  ledgerTransaction LedgerTransaction?
+
+  @@index([paymentId])
+  @@index([merchantId])
+  @@map("payment_events")
+}
+
+// Written in the same transaction as PaymentEvent. The relay claims PENDING
+// rows (SELECT ... FOR UPDATE SKIP LOCKED), publishes to Kafka outside the
+// DB transaction, then marks PUBLISHED only after Kafka acknowledges.
+model OutboxRecord {
+  id             String       @id @default(uuid()) @db.Uuid
+  paymentEventId String       @unique @db.Uuid
+  paymentEvent   PaymentEvent @relation(fields: [paymentEventId], references: [id])
+  topic          String
+  partitionKey   String
+  status         OutboxStatus @default(PENDING)
+  attempts       Int          @default(0)
+  lastError      String?
+  claimedAt      DateTime?
+  claimedBy      String?
+  publishedAt    DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([status, createdAt])
+  @@map("outbox_records")
+}
+
+// Consumer-side dedup record, separate from PaymentEvent because it tracks
+// a different trust boundary: whether THIS delivery's business effects have
+// been applied, not whether the API accepted the event. `eventId` is
+// indexed directly so the consumer can check for a duplicate with a single
+// lookup before touching Payment/Ledger state.
+model InboxRecord {
+  id             String                       @id @default(uuid()) @db.Uuid
+  eventId        String                       @unique @db.Uuid
+  paymentEventId String                       @unique @db.Uuid
+  paymentEvent   PaymentEvent                 @relation(fields: [paymentEventId], references: [id])
+  status         PaymentEventProcessingStatus @default(PENDING)
+  note           String?
+  processedAt    DateTime?
+  createdAt      DateTime                     @default(now())
+
+  @@map("inbox_records")
+}
+
+// `sourceEventId` is unique: redelivering the same Kafka message and
+// retrying the insert hits this constraint, so duplicate delivery cannot
+// duplicate a posting. Separate events (e.g. two distinct partial refunds)
+// have distinct eventIds and are each allowed their own transaction.
+model LedgerTransaction {
+  id            String                @id @default(uuid()) @db.Uuid
+  merchantId    String                @db.Uuid
+  merchant      Merchant              @relation(fields: [merchantId], references: [id])
+  paymentId     String                @db.Uuid
+  payment       Payment               @relation(fields: [paymentId], references: [id])
+  type          LedgerTransactionType
+  sourceEventId String                @unique @db.Uuid
+  sourceEvent   PaymentEvent          @relation(fields: [sourceEventId], references: [eventId])
+  currency      String                @db.VarChar(3)
+  createdAt     DateTime              @default(now())
+
+  entries LedgerEntry[]
+
+  @@index([paymentId])
+  @@map("ledger_transactions")
+}
+
+model LedgerEntry {
+  id                  String            @id @default(uuid()) @db.Uuid
+  ledgerTransactionId String            @db.Uuid
+  ledgerTransaction   LedgerTransaction @relation(fields: [ledgerTransactionId], references: [id])
+  account             LedgerAccount
+  direction           LedgerDirection
+  amountMinor         Int
+  createdAt           DateTime          @default(now())
+
+  @@index([ledgerTransactionId])
+  @@map("ledger_entries")
+}
