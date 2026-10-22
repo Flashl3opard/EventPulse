@@ -11,6 +11,14 @@
   },
   "dependencies": {
     "@eventpulse/config": "*",
-    "@eventpulse/shared": "*"
+    "@eventpulse/database": "*",
+    "@eventpulse/shared": "*",
+    "express": "^5.3.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.1"
   }
 }

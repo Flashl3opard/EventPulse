@@ -1,9 +1,11 @@
-import { CONFIG_PACKAGE_NAME } from "@eventpulse/config";
-import { SHARED_PACKAGE_NAME } from "@eventpulse/shared";
+import { loadConfig } from "@eventpulse/config";
+import { getPrismaClient } from "@eventpulse/database";
+import { createApp } from "./app.js";
 
-// The Express app and routes are added in Milestone 4.
-export const SERVICE_NAME = "@eventpulse/api";
+const config = loadConfig();
+const prisma = getPrismaClient();
+const app = createApp(prisma);
 
-export function describeWorkspaceWiring(): string {
-  return `${SERVICE_NAME} resolves ${SHARED_PACKAGE_NAME} and ${CONFIG_PACKAGE_NAME}`;
-}
+app.listen(config.port, () => {
+  console.log(`[api] listening on port ${config.port} (${config.nodeEnv})`);
+});

@@ -9,6 +9,7 @@
     "noImplicitOverride": true,
     "forceConsistentCasingInFileNames": true,
     "skipLibCheck": true,
+    "types": ["node"],
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "isolatedModules": true,
